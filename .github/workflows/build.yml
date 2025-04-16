@@ -10,7 +10,7 @@ jobs:
   version:
     name: Determine Build Number
     runs-on: [self-hosted, general-apps]
-    if: success() && github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, 'nobuild')
+    if: success() && github.ref == 'refs/heads/main' || github.ref == 'refs/heads/nagabhushan' && !contains(github.event.head_commit.message, 'nobuild')
     outputs:
       BUILD_NUMBER: ${{ steps.gitversion.outputs.semVer }}
     steps:
@@ -33,7 +33,7 @@ jobs:
   build:
     name: Build & Release the docker image
     runs-on: [self-hosted, general-apps]
-    if: success() && github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, 'nobuild')
+    if: success() && github.ref == 'refs/heads/main' || github.ref == 'refs/heads/nagabhushan' && !contains(github.event.head_commit.message, 'nobuild')
     needs: [version]
     env:
       BUILD_NUMBER: ${{ needs.version.outputs.BUILD_NUMBER }}
@@ -61,4 +61,4 @@ jobs:
           context: .
           file: Dockerfile
           push: true
-          tags: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.BUILD_NUMBER }}
+          tags: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:nagabhushan-${{ env.BUILD_NUMBER }}
