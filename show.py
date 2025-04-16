@@ -1,4 +1,7 @@
 import os
+import re
+from pathlib import Path
+
 from flask import Flask, request, render_template, send_from_directory, abort
 import traceback
 import glob
@@ -6,7 +9,27 @@ import glob
 app_folder = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__, template_folder=os.path.join(app_folder, 'templates'))
 
-VER = "20240719_1"
+VER = "20250227"
+
+
+def match_files(folder, index_pattern):
+    # Remove parenthesis used for capture groups
+    index_pattern_glob = index_pattern.replace('(', '').replace(')', '')
+    index_pattern_regex = index_pattern.replace('*', '.+')
+    matched_files = Path(folder).glob(index_pattern_glob)
+    matcher = re.compile(index_pattern_regex)
+    matched_files_data = []
+    for matched_file in matched_files:
+        match = matcher.match(matched_file.relative_to(folder).as_posix())
+        if match:
+            matched_files_data.append((matched_file.as_posix(), match.groups()))
+    return matched_files_data
+
+def format_column(value, groups):
+    """Replace {$X} placeholders with matched regex groups"""
+    for i, group in enumerate(groups):
+        value = value.replace(f'${i+1}', group)
+    return value
 
 @app.route('/')
 def index():
@@ -45,34 +68,15 @@ def index():
     )
 
     if len(config) > 0:
-        index_pattern = config.get("index_pattern", "*")
-        index_pattern = os.path.join(folder, index_pattern)
-        prefix, suffix = index_pattern.split('*')
-        prefix = len(prefix)
-        suffix = len(suffix)
-
-        def get_index(f):
-            f = f[prefix:]
-            if suffix != 0:
-                f = f[:-suffix]
-            return f
-        
-        index_list = glob.glob(index_pattern)
-        index_list = [get_index(f) for f in index_list]
-        index_list = sorted(index_list)
-
-        if config.get("sort_as_number", False):
-            index_list = sorted(index_list, key=lambda x: int(x))
+        matched_files_data = match_files(folder, config['index_pattern'])
+        matched_files_data = sorted(matched_files_data, key=lambda x: x[0])
 
         if config.get("shuffle", False):
             import hashlib
-            index_list = sorted(index_list, key=lambda x: int(hashlib.md5(x.encode()).hexdigest(), 16))
-
-        # print(prefix, suffix)
-        # print(index_list)
-
+            matched_files_data = sorted(matched_files_data, key=lambda x: int(hashlib.md5(x[0].encode()).hexdigest(), 16))
         
         if query_index is not None:
+            # TODO SNB: handle this
             while query_index.startswith(' '):
                 query_index = query_index[1:]
             prev_len = len(query_index) + 1
@@ -81,7 +85,14 @@ def index():
                 query_index = query_index.replace(', ', ',')
 
             query_index_list = list(query_index.split(","))
-            index_list = [index for index in query_index_list if index in index_list]
+            filtered_files_data = []
+            for matched_file_data in matched_files_data:
+                matched_file_index = '/'.join(matched_file_data[1])
+                for query_index in query_index_list:
+                    if query_index in matched_file_index:
+                        filtered_files_data.append(matched_file_data)
+                        break
+            matched_files_data = filtered_files_data
 
         columns = config.get("columns", [])
         column_heads = ["#"] + [c[0] for c in columns]
@@ -93,14 +104,13 @@ def index():
 
         skip_incomplete = config.get("skip_incomplete", False)
 
-        for index in index_list[L:R]:
-            row = [(None, index)]
+        for matched_file_data in matched_files_data[L:R]:
+            row = [(None, '/'.join(matched_file_data[1]))]
             for column in columns:
                 _, column_pattern = column
-                if isinstance(column_pattern, str):
-                    column_pattern = column_pattern.replace('*', index)
-                else:
-                    column_pattern = column_pattern(index)
+                if not column_pattern.startswith("/"):
+                    column_pattern = os.path.join(folder, column_pattern)
+                column_pattern = format_column(column_pattern, matched_file_data[1])
 
                 column_image_candidates = glob.glob(os.path.join(folder, column_pattern))
                 # print(column_pattern(index), column_image_candidates)
@@ -113,7 +123,7 @@ def index():
                     column_image = column_image_candidates[0]
 
                 contents = column_image
-                if column_image.endswith(".txt"):
+                if Path(column_image).suffix in ['.txt', '.json']:
                     try:
                         with open(column_image) as f:
                             contents = "\n".join(f.readlines())
@@ -128,7 +138,7 @@ def index():
             if row is not None:
                 rows.append(row)
 
-        num_pages = (len(index_list) + images_per_page - 1) // images_per_page
+        num_pages = (len(matched_files_data) + images_per_page - 1) // images_per_page
         page = max(page, 1)
         page = min(page, num_pages)
         navi = []
